@@ -14,18 +14,15 @@ def SettingsHeader():
             with antd.Form.Item(form_name="model",
                                 label=get_text("Chat Model", "对话模型")):
                 with antd.Select(options=MODEL_OPTIONS):
-                    with ms.Slot(
-                        "labelRender",
-                            params_mapping=
-                            """(option) => ({
+                    with ms.Slot("labelRender",
+                                 params_mapping="""(option) => ({
                                 label: option.label, 
                                 link: { href: window.MODEL_OPTIONS_MAP[option.value].link },  
-                            })"""
-                    ):
+                            })"""):
                         antd.Typography.Text(as_item="label")
                         antd.Typography.Link(get_text("Model Link", "模型链接"),
-                                            href_target="_blank",
-                                            as_item="link")
+                                             href_target="_blank",
+                                             as_item="link")
 
             with antd.Form.Item(form_name="thinking_budget",
                                 label=get_text("Thinking Budget", "思考预算"),
@@ -38,9 +35,9 @@ def SettingsHeader():
                                  min=MIN_THINKING_BUDGET,
                                  elem_style=dict(width=100),
                                  addon_after="k")
-            with antd.Form.Item(form_name="sys_prompt",
-                                label=get_text("System Prompt", "系统提示")):
-                antd.Input.Textarea(auto_size=dict(minRows=3, maxRows=6))
+            # with antd.Form.Item(form_name="sys_prompt",
+            #                     label=get_text("System Prompt", "系统提示")):
+            #     antd.Input.Textarea(auto_size=dict(minRows=3, maxRows=6))
 
     def close_header(state_value):
         state_value["open"] = False
