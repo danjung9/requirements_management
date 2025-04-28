@@ -6,21 +6,22 @@ import modelscope_studio.components.antd as antd
 import modelscope_studio.components.antdx as antdx
 import modelscope_studio.components.base as ms
 import modelscope_studio.components.pro as pro
-from openai import OpenAI
+import dashscope
 from config import DEFAULT_LOCALE, DEFAULT_SETTINGS, DEFAULT_THEME, DEFAULT_SUGGESTIONS, save_history, get_text, user_config, bot_config, welcome_config, api_key, MODEL_OPTIONS_MAP
 from ui_components.logo import Logo
 from ui_components.settings_header import SettingsHeader
 from ui_components.thinking_button import ThinkingButton
+from dashscope import Generation
 
-client = OpenAI(api_key=api_key,
-                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
+dashscope.api_key = api_key
 
 
 def format_history(history, sys_prompt):
-    messages = [{
-        "role": "system",
-        "content": sys_prompt,
-    }]
+    # messages = [{
+    #     "role": "system",
+    #     "content": sys_prompt,
+    # }]
+    messages = []
     for item in history:
         if item["role"] == "user":
             messages.append({"role": "user", "content": item["content"]})
@@ -72,18 +73,14 @@ class Gradio_Events:
             state: gr.update(value=state_value),
         }
         try:
-            response = client.chat.completions.create(
+            response = Generation.call(
                 model=model,
                 messages=messages,
                 stream=True,
-                extra_body={
-                    "enable_thinking":
-                    enable_thinking,
-                    **({
-                        "thinking_budget":
-                        settings.get("thinking_budget", 1) * 1024
-                    } if enable_thinking else {})
-                })
+                result_format='message',
+                incremental_output=True,
+                enable_thinking=enable_thinking,
+                thinking_budget=settings.get("thinking_budget", 1) * 1024)
             start_time = time.time()
             reasoning_content = ""
             answer_content = ""
@@ -91,10 +88,12 @@ class Gradio_Events:
             is_answering = False
             contents = [None, None]
             for chunk in response:
-                if not chunk.choices:
+                if (not chunk.output.choices[0].message.get("content")
+                        and not chunk.output.choices[0].message.get(
+                            "reasoning_content")):
                     pass
                 else:
-                    delta = chunk.choices[0].delta
+                    delta = chunk.output.choices[0].message
                     if hasattr(
                             delta,
                             'reasoning_content') and delta.reasoning_content:
@@ -111,23 +110,22 @@ class Gradio_Events:
                             }
                             is_thinking = True
                         reasoning_content += delta.reasoning_content
-                    else:
-                        if hasattr(delta, 'content') and delta.content != None:
-                            if not is_answering:
-                                thought_cost_time = "{:.2f}".format(
-                                    time.time() - start_time)
-                                if contents[0]:
-                                    contents[0]["options"]["title"] = get_text(
-                                        f"End of Thought ({thought_cost_time}s)",
-                                        f"已深度思考 (用时{thought_cost_time}s)")
-                                    contents[0]["options"]["status"] = "done"
-                                contents[1] = {
-                                    "type": "text",
-                                    "content": "",
-                                }
+                    if hasattr(delta, 'content') and delta.content:
+                        if not is_answering:
+                            thought_cost_time = "{:.2f}".format(time.time() -
+                                                                start_time)
+                            if contents[0]:
+                                contents[0]["options"]["title"] = get_text(
+                                    f"End of Thought ({thought_cost_time}s)",
+                                    f"已深度思考 (用时{thought_cost_time}s)")
+                                contents[0]["options"]["status"] = "done"
+                            contents[1] = {
+                                "type": "text",
+                                "content": "",
+                            }
 
-                                is_answering = True
-                            answer_content += delta.content
+                            is_answering = True
+                        answer_content += delta.content
 
                     if contents[0]:
                         contents[0]["content"] = reasoning_content
@@ -136,11 +134,14 @@ class Gradio_Events:
                 history[-1]["content"] = [
                     content for content in contents if content
                 ]
+
                 history[-1]["loading"] = False
                 yield {
                     chatbot: gr.update(value=history),
                     state: gr.update(value=state_value)
                 }
+            print("model: ", model, "-", "reasoning_content: ",
+                  reasoning_content, "\n", "content: ", answer_content)
             history[-1]["status"] = "done"
             cost_time = "{:.2f}".format(time.time() - start_time)
             history[-1]["footer"] = get_text(f"{cost_time}s",
@@ -150,6 +151,7 @@ class Gradio_Events:
                 state: gr.update(value=state_value),
             }
         except Exception as e:
+            print("model: ", model, "-", "Error: ", e)
             history[-1]["loading"] = False
             history[-1]["status"] = "done"
             history[-1]["content"] += [{
