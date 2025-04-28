@@ -329,25 +329,31 @@ class Gradio_Events:
         return gr.update(value=e._data["payload"][0]["value"]["description"])
 
     @staticmethod
-    def new_chat(state_value):
+    def new_chat(thinking_btn_state, state_value):
         if not state_value["conversation_id"]:
             return gr.skip()
         state_value["conversation_id"] = ""
+        thinking_btn_state["enable_thinking"] = True
         return gr.update(active_key=state_value["conversation_id"]), gr.update(
             value=None), gr.update(value=DEFAULT_SETTINGS), gr.update(
-                value=state_value)
+                value=thinking_btn_state), gr.update(value=state_value)
 
     @staticmethod
-    def select_conversation(state_value, e: gr.EventData):
+    def select_conversation(thinking_btn_state_value, state_value,
+                            e: gr.EventData):
         active_key = e._data["payload"][0]
         if state_value["conversation_id"] == active_key or (
                 active_key not in state_value["conversation_contexts"]):
             return gr.skip()
         state_value["conversation_id"] = active_key
+        thinking_btn_state_value["enable_thinking"] = state_value[
+            "conversation_contexts"][active_key]["enable_thinking"]
         return gr.update(active_key=active_key), gr.update(
             value=state_value["conversation_contexts"][active_key]["history"]
         ), gr.update(value=state_value["conversation_contexts"][active_key]
-                     ["settings"]), gr.update(value=state_value)
+                     ["settings"]), gr.update(
+                         value=thinking_btn_state_value), gr.update(
+                             value=state_value)
 
     @staticmethod
     def click_conversation_menu(state_value, e: gr.EventData):
@@ -378,14 +384,6 @@ class Gradio_Events:
         settings_header_state_value[
             "open"] = not settings_header_state_value["open"]
         return gr.update(value=settings_header_state_value)
-
-    @staticmethod
-    def apply_thinking_btn_state(thinking_btn_state_value, state_value):
-        if not state_value["conversation_id"]:
-            return gr.skip()
-        state_value["conversation_contexts"][state_value["conversation_id"]][
-            "enable_thinking"] = thinking_btn_state_value["enable_thinking"]
-        return gr.update(value=state_value)
 
     @staticmethod
     def clear_conversation_history(state_value):
@@ -579,14 +577,18 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
                   outputs=[conversations, state])
 
     # Conversations Handler
-    add_conversation_btn.click(
-        fn=Gradio_Events.new_chat,
-        inputs=[state],
-        outputs=[conversations, chatbot, settings_form, state])
-    conversations.active_change(
-        fn=Gradio_Events.select_conversation,
-        inputs=[state],
-        outputs=[conversations, chatbot, settings_form, state])
+    add_conversation_btn.click(fn=Gradio_Events.new_chat,
+                               inputs=[thinking_btn_state, state],
+                               outputs=[
+                                   conversations, chatbot, settings_form,
+                                   thinking_btn_state, state
+                               ])
+    conversations.active_change(fn=Gradio_Events.select_conversation,
+                                inputs=[thinking_btn_state, state],
+                                outputs=[
+                                    conversations, chatbot, settings_form,
+                                    thinking_btn_state, state
+                                ])
     conversations.menu_click(fn=Gradio_Events.click_conversation_menu,
                              inputs=[state],
                              outputs=[conversations, chatbot, state])
@@ -626,9 +628,6 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
                  cancels=[submit_event, regenerating_event],
                  queue=False)
     # Input Actions Handler
-    thinking_btn_state.change(fn=Gradio_Events.apply_thinking_btn_state,
-                              inputs=[thinking_btn_state, state],
-                              outputs=[state])
     setting_btn.click(fn=Gradio_Events.toggle_settings_header,
                       inputs=[settings_header_state],
                       outputs=[settings_header_state])
