@@ -478,6 +478,7 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
             # Left Column
             with antd.Col(md=dict(flex="0 0 260px", span=24, order=0),
                           span=0,
+                          elem_style=dict(width=0),
                           order=1):
                 with ms.Div(elem_classes="chatbot-conversations"):
                     with antd.Flex(vertical=True,
