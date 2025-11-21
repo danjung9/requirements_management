@@ -4,12 +4,9 @@ from modelscope_studio.components.pro.chatbot import ChatbotActionConfig, Chatbo
 # Env
 is_cn = os.getenv('MODELSCOPE_ENVIRONMENT') == 'studio'
 api_key = os.getenv('API_KEY')
-
-
-def get_text(text: str, cn_text: str):
-    if is_cn:
-        return cn_text
-    return text
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+QWEN_LOGO_PATH = os.path.join(ASSETS_DIR, "requirementsassistant.png")
 
 
 # Save history in browser
@@ -24,10 +21,8 @@ def user_config(disabled_actions=None):
             "copy", "edit",
             ChatbotActionConfig(
                 action="delete",
-                popconfirm=dict(title=get_text("Delete the message", "删除消息"),
-                                description=get_text(
-                                    "Are you sure to delete this message?",
-                                    "确认删除该消息？"),
+                popconfirm=dict(title="Delete the message",
+                                description="Are you sure to delete this message?",
                                 okButtonProps=dict(danger=True)))
         ],
         disabled_actions=disabled_actions)
@@ -39,32 +34,27 @@ def bot_config(disabled_actions=None):
         ChatbotActionConfig(
             action="retry",
             popconfirm=dict(
-                title=get_text("Regenerate the message", "重新生成消息"),
-                description=get_text(
-                    "Regenerate the message will also delete all subsequent messages.",
-                    "重新生成消息会删除所有后续消息。"),
+                title="Regenerate the message",
+                description="Regenerate the message will also delete all subsequent messages.",
                 okButtonProps=dict(danger=True))),
         ChatbotActionConfig(action="delete",
                             popconfirm=dict(
-                                title=get_text("Delete the message", "删除消息"),
-                                description=get_text(
-                                    "Are you sure to delete this message?",
-                                    "确认删除该消息？"),
+                                title="Delete the message",
+                                description="Are you sure to delete this message?",
                                 okButtonProps=dict(danger=True)))
     ],
-                            avatar="./assets/qwen.png",
+                            avatar=QWEN_LOGO_PATH,
                             disabled_actions=disabled_actions)
 
 
 def welcome_config():
     return ChatbotWelcomeConfig(
         variant="borderless",
-        icon="./assets/qwen.png",
-        title=get_text("Hello, I'm Qwen3", "你好，我是 Qwen3"),
-        description=get_text("Select a model and enter text to get started.",
-                             "选择模型并输入文本，开始对话吧。"),
+        icon=QWEN_LOGO_PATH,
+        title="Hello, I'm Requirements Assistant",
+        description="Upload your requirements document and ask a question. I will help show compliance information.",
         prompts=dict(
-            title=get_text("How can I help you today?", "有什么我能帮助你的吗?"),
+            title="How can I help you today?",
             styles={
                 "list": {
                     "width": '100%',
@@ -75,84 +65,43 @@ def welcome_config():
             },
             items=[{
                 "label":
-                get_text("📅 Make a plan", "📅 制定计划"),
+                "Check Requirements",
                 "children": [{
-                    "description":
-                    get_text("Help me with a plan to start a business",
-                             "帮助我制定一个创业计划")
+                    "description": "What are lighting requirements when using intermediate or wet-weather tyres?",
                 }, {
-                    "description":
-                    get_text("Help me with a plan to achieve my goals",
-                             "帮助我制定一个实现目标的计划")
+                    "description": "When using intermediate or wet-weather tyres in a race without a safety car, what are the regulations for the lights?",
                 }, {
-                    "description":
-                    get_text("Help me with a plan for a successful interview",
-                             "帮助我制定一个成功的面试计划")
-                }]
-            }, {
-                "label":
-                get_text("🖋 Help me write", "🖋 帮我写"),
-                "children": [{
-                    "description":
-                    get_text("Help me write a story with a twist ending",
-                             "帮助我写一个带有意外结局的故事")
-                }, {
-                    "description":
-                    get_text("Help me write a blog post on mental health",
-                             "帮助我写一篇关于心理健康的博客文章")
-                }, {
-                    "description":
-                    get_text("Help me write a letter to my future self",
-                             "帮助我写一封给未来自己的信")
+                    "description": "When there is a safety car during a race, when should lapped cars unlap themselves?",
                 }]
             }]),
     )
 
 
 DEFAULT_SUGGESTIONS = [{
-    "label":
-    get_text('Make a plan', '制定计划'),
-    "value":
-    get_text('Make a plan', '制定计划'),
+    "label": 'Make a plan',
+    "value": 'Make a plan',
     "children": [{
-        "label":
-        get_text("Start a business", "开始创业"),
-        "value":
-        get_text("Help me with a plan to start a business", "帮助我制定一个创业计划")
+        "label": "Start a business",
+        "value": "Help me with a plan to start a business"
     }, {
-        "label":
-        get_text("Achieve my goals", "实现我的目标"),
-        "value":
-        get_text("Help me with a plan to achieve my goals", "帮助我制定一个实现目标的计划")
+        "label": "Achieve my goals",
+        "value": "Help me with a plan to achieve my goals"
     }, {
-        "label":
-        get_text("Successful interview", "成功的面试"),
-        "value":
-        get_text("Help me with a plan for a successful interview",
-                 "帮助我制定一个成功的面试计划")
+        "label": "Successful interview",
+        "value": "Help me with a plan for a successful interview"
     }]
 }, {
-    "label":
-    get_text('Help me write', '帮我写'),
-    "value":
-    get_text("Help me write", '帮我写'),
+    "label": 'Help me write',
+    "value": "Help me write",
     "children": [{
-        "label":
-        get_text("Story with a twist ending", "带有意外结局的故事"),
-        "value":
-        get_text("Help me write a story with a twist ending",
-                 "帮助我写一个带有意外结局的故事")
+        "label": "Story with a twist ending",
+        "value": "Help me write a story with a twist ending"
     }, {
-        "label":
-        get_text("Blog post on mental health", "关于心理健康的博客文章"),
-        "value":
-        get_text("Help me write a blog post on mental health",
-                 "帮助我写一篇关于心理健康的博客文章")
+        "label": "Blog post on mental health",
+        "value": "Help me write a blog post on mental health"
     }, {
-        "label":
-        get_text("Letter to my future self", "给未来自己的信"),
-        "value":
-        get_text("Help me write a letter to my future self", "帮助我写一封给未来自己的信")
+        "label": "Letter to my future self",
+        "value": "Help me write a letter to my future self"
     }]
 }]
 
@@ -164,57 +113,6 @@ MAX_THINKING_BUDGET = 38
 
 DEFAULT_THINKING_BUDGET = 38
 
-DEFAULT_MODEL = "qwen3-235b-a22b"
-
-MODEL_OPTIONS = [
-    {
-        "label": get_text("Qwen3-235B-A22B", "通义千问3-235B-A22B"),
-        "modelId": "Qwen/Qwen3-235B-A22B",
-        "value": "qwen3-235b-a22b"
-    },
-    {
-        "label": get_text("Qwen3-32B", "通义千问3-32B"),
-        "modelId": "Qwen/Qwen3-32B",
-        "value": "qwen3-32b"
-    },
-    {
-        "label": get_text("Qwen3-30B-A3B", "通义千问3-30B-A3B"),
-        "modelId": "Qwen/Qwen3-30B-A3B",
-        "value": "qwen3-30b-a3b"
-    },
-    {
-        "label": get_text("Qwen3-14B", "通义千问3-14B"),
-        "modelId": "Qwen/Qwen3-14B",
-        "value": "qwen3-14b"
-    },
-    {
-        "label": get_text("Qwen3-8B", "通义千问3-8B"),
-        "modelId": "Qwen/Qwen3-8B",
-        "value": "qwen3-8b"
-    },
-    {
-        "label": get_text("Qwen3-4B", "通义千问3-4B"),
-        "modelId": "Qwen/Qwen3-4B",
-        "value": "qwen3-4b"
-    },
-    {
-        "label": get_text("Qwen3-1.7B", "通义千问3-1.7B"),
-        "modelId": "Qwen/Qwen3-1.7B",
-        "value": "qwen3-1.7b"
-    },
-    {
-        "label": get_text("Qwen3-0.6B", "通义千问3-0.6B"),
-        "modelId": "Qwen/Qwen3-0.6B",
-        "value": "qwen3-0.6b"
-    },
-]
-
-for model in MODEL_OPTIONS:
-    model[
-        "link"] = is_cn and f"https://modelscope.cn/models/{model['modelId']}" or f"https://huggingface.co/{model['modelId']}"
-
-MODEL_OPTIONS_MAP = {model["value"]: model for model in MODEL_OPTIONS}
-
 DEFAULT_LOCALE = 'zh_CN' if is_cn else 'en_US'
 
 DEFAULT_THEME = {
@@ -224,7 +122,6 @@ DEFAULT_THEME = {
 }
 
 DEFAULT_SETTINGS = {
-    "model": DEFAULT_MODEL,
     "sys_prompt": DEFAULT_SYS_PROMPT,
-    "thinking_budget": DEFAULT_THINKING_BUDGET
+    "uploaded_file": None,
 }

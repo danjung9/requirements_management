@@ -1,5 +1,5 @@
 ---
-title: Qwen3 Demo
+title: Demo
 emoji: 📊
 colorFrom: red
 colorTo: gray

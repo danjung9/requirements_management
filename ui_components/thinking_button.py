@@ -1,12 +1,11 @@
 import modelscope_studio.components.antd as antd
 import modelscope_studio.components.base as ms
 import gradio as gr
-from config import get_text
 
 
 def ThinkingButton():
     state = gr.State({"enable_thinking": True})
-    with antd.Button(get_text("Thinking", "深度思考"),
+    with antd.Button("Thinking",
                      shape="round",
                      color="primary",
                      variant="solid") as thinking_btn:

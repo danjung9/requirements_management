@@ -8,9 +8,5 @@ def Logo():
                                                padding=8,
                                                margin=0)):
         with antd.Flex(align="center", gap="small", justify="center"):
-            antd.Image('./assets/qwen.png',
-                       preview=False,
-                       alt="logo",
-                       width=24,
-                       height=24)
-            ms.Span("Qwen3")
+            ms.Span("🤖")
+            ms.Span("RequireGPT")

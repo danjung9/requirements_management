@@ -1,13 +1,13 @@
 import uuid
 import time
-import json
+import os
 import gradio as gr
 import modelscope_studio.components.antd as antd
 import modelscope_studio.components.antdx as antdx
 import modelscope_studio.components.base as ms
 import modelscope_studio.components.pro as pro
 import dashscope
-from config import DEFAULT_LOCALE, DEFAULT_SETTINGS, DEFAULT_THEME, DEFAULT_SUGGESTIONS, save_history, get_text, user_config, bot_config, welcome_config, api_key, MODEL_OPTIONS_MAP
+from config import DEFAULT_LOCALE, DEFAULT_SETTINGS, DEFAULT_THEME, DEFAULT_SUGGESTIONS, save_history, user_config, bot_config, welcome_config, api_key
 from ui_components.logo import Logo
 from ui_components.settings_header import SettingsHeader
 from ui_components.thinking_button import ThinkingButton
@@ -15,13 +15,97 @@ from dashscope import Generation
 
 dashscope.api_key = api_key
 
+MAX_CONTEXT_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
+MAX_CONTEXT_FILE_CHARACTERS = 6000
+SUPPORTED_CONTEXT_FILE_EXTENSIONS = {".txt", ".md", ".json", ".csv"}
 
-def format_history(history, sys_prompt):
-    # messages = [{
-    #     "role": "system",
-    #     "content": sys_prompt,
-    # }]
+
+def _extract_uploaded_file_path(file_reference):
+    if not file_reference:
+        return None
+    if isinstance(file_reference, list):
+        if not file_reference:
+            return None
+        return _extract_uploaded_file_path(file_reference[0])
+    if isinstance(file_reference, str):
+        return file_reference
+    if isinstance(file_reference, dict):
+        return file_reference.get("name") or file_reference.get("path")
+    if hasattr(file_reference, "name"):
+        return getattr(file_reference, "name")
+    return None
+
+
+def load_context_file(file_reference):
+    file_path = _extract_uploaded_file_path(file_reference)
+    if not file_path or not os.path.exists(file_path):
+        raise gr.Error("Unable to read the uploaded file.")
+
+    file_size = os.path.getsize(file_path)
+    if file_size > MAX_CONTEXT_FILE_SIZE:
+        raise gr.Error(
+            "File too large. Limit is 2 MB.")
+
+    _, ext = os.path.splitext(file_path)
+    if ext and ext.lower() not in SUPPORTED_CONTEXT_FILE_EXTENSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_CONTEXT_FILE_EXTENSIONS))
+        raise gr.Error(
+            f"Unsupported file type. Allowed: {allowed}")
+
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+    truncated = len(content) > MAX_CONTEXT_FILE_CHARACTERS
+    content = content[:MAX_CONTEXT_FILE_CHARACTERS].strip()
+
+    return {
+        "name": os.path.basename(file_path),
+        "size": file_size,
+        "content": content,
+        "truncated": truncated
+    }
+
+
+def resolve_uploaded_file(uploaded_file_value, state_value):
+    conversation_id = state_value.get("conversation_id")
+    previous_settings = {}
+    if conversation_id:
+        previous_settings = state_value["conversation_contexts"].get(
+            conversation_id, {}).get("settings", {})
+    if uploaded_file_value:
+        return load_context_file(uploaded_file_value)
+    return previous_settings.get("uploaded_file")
+
+
+def format_file_status(uploaded_file):
+    if not uploaded_file:
+        return "No file uploaded"
+    size_kb = uploaded_file.get("size", 0) / 1024
+    size_suffix = f" (~{size_kb:.1f} KB)" if size_kb else ""
+    status = f"Using file: {uploaded_file.get('name', 'file')}{size_suffix}"
+    if uploaded_file.get("truncated"):
+        status += " (content truncated)"
+    return status
+
+
+def format_history(history, sys_prompt, uploaded_file=None):
     messages = []
+    system_sections = []
+    if sys_prompt:
+        system_sections.append(sys_prompt)
+    if uploaded_file and uploaded_file.get("content"):
+        file_section = (
+            f"Reference file ({uploaded_file.get('name', 'file')}):\n"
+            f"{uploaded_file.get('content', '')}")
+        if uploaded_file.get("truncated"):
+            file_section += (
+                "\n\n[File content truncated to the first "
+                f"{MAX_CONTEXT_FILE_CHARACTERS} characters.]")
+        system_sections.append(file_section)
+    if system_sections:
+        messages.append({
+            "role": "system",
+            "content": "\n\n".join(system_sections)
+        })
     for item in history:
         if item["role"] == "user":
             messages.append({"role": "user", "content": item["content"]})
@@ -52,7 +136,8 @@ class Gradio_Events:
             state_value["conversation_id"]]["enable_thinking"]
         model = settings.get("model")
         messages = format_history(history,
-                                  sys_prompt=settings.get("sys_prompt", ""))
+                                  sys_prompt=settings.get("sys_prompt", ""),
+                                  uploaded_file=settings.get("uploaded_file"))
 
         history.append({
             "role":
@@ -61,7 +146,7 @@ class Gradio_Events:
             "key":
             str(uuid.uuid4()),
             "header":
-            MODEL_OPTIONS_MAP.get(model, {}).get("label", None),
+            "Response",
             "loading":
             True,
             "status":
@@ -73,6 +158,12 @@ class Gradio_Events:
             state: gr.update(value=state_value),
         }
         try:
+
+        ## 
+        # TO DO: Modify the Generation.call parameters as needed for your model
+        # Should be a RAG -> router -> agent pipeline
+        ##
+
             response = Generation.call(
                 model=model,
                 messages=messages,
@@ -102,7 +193,7 @@ class Gradio_Events:
                                 "type": "tool",
                                 "content": "",
                                 "options": {
-                                    "title": get_text("Thinking...", "思考中..."),
+                                    "title": "Thinking...",
                                     "status": "pending"
                                 },
                                 "copyable": False,
@@ -115,9 +206,7 @@ class Gradio_Events:
                             thought_cost_time = "{:.2f}".format(time.time() -
                                                                 start_time)
                             if contents[0]:
-                                contents[0]["options"]["title"] = get_text(
-                                    f"End of Thought ({thought_cost_time}s)",
-                                    f"已深度思考 (用时{thought_cost_time}s)")
+                                contents[0]["options"]["title"] = f"End of Thought ({thought_cost_time}s)"
                                 contents[0]["options"]["status"] = "done"
                             contents[1] = {
                                 "type": "text",
@@ -144,8 +233,7 @@ class Gradio_Events:
                   reasoning_content, "\n", "content: ", answer_content)
             history[-1]["status"] = "done"
             cost_time = "{:.2f}".format(time.time() - start_time)
-            history[-1]["footer"] = get_text(f"{cost_time}s",
-                                             f"用时{cost_time}s")
+            history[-1]["footer"] = f"{cost_time}s"
             yield {
                 chatbot: gr.update(value=history),
                 state: gr.update(value=state_value),
@@ -168,7 +256,7 @@ class Gradio_Events:
 
     @staticmethod
     def add_message(input_value, settings_form_value, thinking_btn_state_value,
-                    state_value):
+                    uploaded_file_value, state_value):
         if not state_value["conversation_id"]:
             random_id = str(uuid.uuid4())
             history = []
@@ -185,10 +273,16 @@ class Gradio_Events:
         history = state_value["conversation_contexts"][
             state_value["conversation_id"]]["history"]
 
+        uploaded_file = resolve_uploaded_file(uploaded_file_value,
+                                              state_value)
+
         state_value["conversation_contexts"][
             state_value["conversation_id"]] = {
                 "history": history,
-                "settings": settings_form_value,
+                "settings": {
+                    **settings_form_value,
+                    "uploaded_file": uploaded_file
+                },
                 "enable_thinking": thinking_btn_state_value["enable_thinking"]
             }
         history.append({
@@ -274,7 +368,7 @@ class Gradio_Events:
             state_value["conversation_id"]]["history"]
         history[-1]["loading"] = False
         history[-1]["status"] = "done"
-        history[-1]["footer"] = get_text("Chat completion paused", "对话已暂停")
+        history[-1]["footer"] = "Chat completion paused"
         return Gradio_Events.postprocess_submit(state_value)
 
     @staticmethod
@@ -299,16 +393,22 @@ class Gradio_Events:
 
     @staticmethod
     def regenerate_message(settings_form_value, thinking_btn_state_value,
-                           state_value, e: gr.EventData):
+                           uploaded_file_value, state_value, e: gr.EventData):
         index = e._data["payload"][0]["index"]
         history = state_value["conversation_contexts"][
             state_value["conversation_id"]]["history"]
         history = history[:index]
 
+        uploaded_file = resolve_uploaded_file(uploaded_file_value,
+                                              state_value)
+
         state_value["conversation_contexts"][
             state_value["conversation_id"]] = {
                 "history": history,
-                "settings": settings_form_value,
+                "settings": {
+                    **settings_form_value,
+                    "uploaded_file": uploaded_file
+                },
                 "enable_thinking": thinking_btn_state_value["enable_thinking"]
             }
 
@@ -336,9 +436,15 @@ class Gradio_Events:
             return gr.skip()
         state_value["conversation_id"] = ""
         thinking_btn_state["enable_thinking"] = True
-        return gr.update(active_key=state_value["conversation_id"]), gr.update(
-            value=None), gr.update(value=DEFAULT_SETTINGS), gr.update(
-                value=thinking_btn_state), gr.update(value=state_value)
+        return (
+            gr.update(active_key=state_value["conversation_id"]),
+            gr.update(value=None),
+            gr.update(value={**DEFAULT_SETTINGS}),
+            gr.update(value=None),
+            gr.update(value=format_file_status(None)),
+            gr.update(value=thinking_btn_state),
+            gr.update(value=state_value),
+        )
 
     @staticmethod
     def select_conversation(thinking_btn_state_value, state_value,
@@ -348,14 +454,19 @@ class Gradio_Events:
                 active_key not in state_value["conversation_contexts"]):
             return gr.skip()
         state_value["conversation_id"] = active_key
-        thinking_btn_state_value["enable_thinking"] = state_value[
-            "conversation_contexts"][active_key]["enable_thinking"]
-        return gr.update(active_key=active_key), gr.update(
-            value=state_value["conversation_contexts"][active_key]["history"]
-        ), gr.update(value=state_value["conversation_contexts"][active_key]
-                     ["settings"]), gr.update(
-                         value=thinking_btn_state_value), gr.update(
-                             value=state_value)
+        conversation = state_value["conversation_contexts"][active_key]
+        thinking_btn_state_value["enable_thinking"] = conversation[
+            "enable_thinking"]
+        settings = conversation.get("settings") or {**DEFAULT_SETTINGS}
+        return (
+            gr.update(active_key=active_key),
+            gr.update(value=conversation["history"]),
+            gr.update(value=settings),
+            gr.update(value=None),
+            gr.update(value=format_file_status(settings.get("uploaded_file"))),
+            gr.update(value=thinking_btn_state_value),
+            gr.update(value=state_value),
+        )
 
     @staticmethod
     def click_conversation_menu(state_value, e: gr.EventData):
@@ -371,14 +482,22 @@ class Gradio_Events:
 
             if state_value["conversation_id"] == conversation_id:
                 state_value["conversation_id"] = ""
-                return gr.update(
-                    items=state_value["conversations"],
-                    active_key=state_value["conversation_id"]), gr.update(
-                        value=None), gr.update(value=state_value)
+                return (
+                    gr.update(items=state_value["conversations"],
+                              active_key=state_value["conversation_id"]),
+                    gr.update(value=None),
+                    gr.update(value=None),
+                    gr.update(value=format_file_status(None)),
+                    gr.update(value=state_value),
+                )
             else:
-                return gr.update(
-                    items=state_value["conversations"]), gr.skip(), gr.update(
-                        value=state_value)
+                return (
+                    gr.update(items=state_value["conversations"]),
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                    gr.update(value=state_value),
+                )
         return gr.skip()
 
     @staticmethod
@@ -410,6 +529,25 @@ class Gradio_Events:
         return gr.update(
             items=browser_state_value["conversations"]), gr.update(
                 value=state_value)
+
+    @staticmethod
+    def preview_uploaded_file(uploaded_file_value):
+        if not uploaded_file_value:
+            return gr.update(value=format_file_status(None))
+        uploaded_file = load_context_file(uploaded_file_value)
+        return gr.update(value=format_file_status(uploaded_file))
+
+    @staticmethod
+    def remove_uploaded_file(state_value):
+        conversation_id = state_value.get("conversation_id")
+        if conversation_id and conversation_id in state_value[
+                "conversation_contexts"]:
+            state_value["conversation_contexts"][conversation_id].setdefault(
+                "settings", {**DEFAULT_SETTINGS})
+            state_value["conversation_contexts"][conversation_id]["settings"][
+                "uploaded_file"] = None
+        return gr.update(value=None), gr.update(
+            value=format_file_status(None)), gr.update(value=state_value)
 
 
 css = """
@@ -460,12 +598,19 @@ css = """
     display: flex;
     flex-wrap: wrap;
 }
+
+#chatbot .setting-form-file-upload input[type="file"] {
+    padding: 4px;
+}
+
+#chatbot .setting-form-file-status {
+    font-size: 12px;
+    color: var(--ms-gr-ant-color-text-tertiary);
+    margin-top: 4px;
+}
 """
 
-model_options_map_json = json.dumps(MODEL_OPTIONS_MAP)
-js = "function init() { window.MODEL_OPTIONS_MAP=" + model_options_map_json + "}"
-
-with gr.Blocks(css=css, js=js, fill_width=True) as demo:
+with gr.Blocks(css=css, fill_width=True) as demo:
     state = gr.State({
         "conversation_contexts": {},
         "conversations": [],
@@ -492,7 +637,7 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
                                          color="primary",
                                          variant="filled",
                                          block=True) as add_conversation_btn:
-                            ms.Text(get_text("New Conversation", "新建对话"))
+                            ms.Text("New Conversation")
                             with ms.Slot("icon"):
                                 antd.Icon("PlusOutlined")
 
@@ -539,11 +684,9 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
                       onKeyDown(e)
                     }""") as suggestion:
                         with ms.Slot("children"):
-                            with antdx.Sender(placeholder=get_text(
-                                    "Enter \"/\" to get suggestions",
-                                    "输入 \"/\" 获取提示"), ) as input:
+                            with antdx.Sender(placeholder="Enter \"/\" to get suggestions") as input:
                                 with ms.Slot("header"):
-                                    settings_header_state, settings_form = SettingsHeader(
+                                    settings_header_state, settings_form, context_file, file_status, remove_file_btn = SettingsHeader(
                                     )
                                 with ms.Slot("prefix"):
                                     with antd.Flex(
@@ -570,7 +713,7 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
                 "conversation_contexts": {},
                 "conversations": [],
             },
-            storage_key="qwen3_chat_demo_storage")
+            storage_key="chat_demo_storage")
         state.change(fn=Gradio_Events.update_browser_state,
                      inputs=[state],
                      outputs=[browser_state])
@@ -584,17 +727,22 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
                                inputs=[thinking_btn_state, state],
                                outputs=[
                                    conversations, chatbot, settings_form,
+                                   context_file, file_status,
                                    thinking_btn_state, state
                                ])
     conversations.active_change(fn=Gradio_Events.select_conversation,
                                 inputs=[thinking_btn_state, state],
                                 outputs=[
                                     conversations, chatbot, settings_form,
+                                    context_file, file_status,
                                     thinking_btn_state, state
                                 ])
     conversations.menu_click(fn=Gradio_Events.click_conversation_menu,
                              inputs=[state],
-                             outputs=[conversations, chatbot, state])
+                             outputs=[
+                                 conversations, chatbot, context_file,
+                                 file_status, state
+                             ])
     # Chatbot Handler
     chatbot.welcome_prompt_select(fn=Gradio_Events.apply_prompt,
                                   outputs=[input])
@@ -608,7 +756,7 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
 
     regenerating_event = chatbot.retry(
         fn=Gradio_Events.regenerate_message,
-        inputs=[settings_form, thinking_btn_state, state],
+        inputs=[settings_form, thinking_btn_state, context_file, state],
         outputs=[
             input, clear_btn, conversation_delete_menu_item,
             add_conversation_btn, conversations, chatbot, state
@@ -617,7 +765,7 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
     # Input Handler
     submit_event = input.submit(
         fn=Gradio_Events.add_message,
-        inputs=[input, settings_form, thinking_btn_state, state],
+        inputs=[input, settings_form, thinking_btn_state, context_file, state],
         outputs=[
             input, clear_btn, conversation_delete_menu_item,
             add_conversation_btn, conversations, chatbot, state
@@ -637,6 +785,12 @@ with gr.Blocks(css=css, js=js, fill_width=True) as demo:
     clear_btn.click(fn=Gradio_Events.clear_conversation_history,
                     inputs=[state],
                     outputs=[chatbot, state])
+    context_file.change(fn=Gradio_Events.preview_uploaded_file,
+                        inputs=[context_file],
+                        outputs=[file_status])
+    remove_file_btn.click(fn=Gradio_Events.remove_uploaded_file,
+                          inputs=[state],
+                          outputs=[context_file, file_status, state])
     suggestion.select(fn=Gradio_Events.select_suggestion,
                       inputs=[input],
                       outputs=[input])
