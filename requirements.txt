@@ -6,3 +6,4 @@ nltk
 pypdf
 sentence-transformers
 numpy
+openai

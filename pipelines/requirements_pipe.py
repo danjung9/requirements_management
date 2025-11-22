@@ -2,8 +2,11 @@
 Template pipeline that runs a simple RAG -> router -> agent flow and streams
 text back in the shape expected by Gradio_Events.submit.
 """
+import os
 from dataclasses import dataclass
 from typing import Iterator, Iterable, List, Dict, Any
+
+from openai import OpenAI
 
 
 # ---- Streaming message shape expected by app.py ----
@@ -53,26 +56,106 @@ class Router:
 
 
 class JiraAgent:
-    """Creates Jira tickets from requirements and streams text tokens."""
+    """Generates Jira ticket content using a Qwen model on OpenRouter and streams text."""
+
+    def __init__(self,
+                 model: str = "qwen/qwen3-4b:free",
+                 api_key: str | None = None):
+        resolved_key = api_key or os.getenv("OPENROUTER_API_KEY") \
+            or os.getenv("OPENAI_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "Missing OpenRouter API key: set OPENROUTER_API_KEY (preferred) "
+                "or OPENAI_API_KEY in the environment, or pass api_key to JiraAgent"
+            )
+
+        self.model = model
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=resolved_key,
+        )
 
     def stream(self, requirements: str) -> Iterable[str]:
-        # Replace with your Jira ticket creation logic and yield updates/tokens.
-        result = f"[JIRA] Ticket(s) created for: {requirements}"
-        for token in result.split():
-            yield token + " "
+        system_prompt = (
+            "You are a Jira assistant. Draft a concise ticket with fields:\n"
+            "- Summary: 1-line goal\n"
+            "- Description: key context and expected behavior\n"
+            "- Acceptance Criteria: 3-5 bullet points, clear and testable.\n"
+            "Keep language direct and actionable.")
+        user_prompt = (
+            "Create a Jira ticket for these requirements:\n"
+            f"{requirements}")
+
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{
+                "role": "system",
+                "content": system_prompt
+            }, {
+                "role": "user",
+                "content": user_prompt
+            }],
+            max_tokens=512,
+            temperature=0.3,
+            stream=True,
+        )
+
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                # Yield raw text increments so the frontend can stream.
+                yield delta.content
 
 
 class ComplianceMatrixAgent:
-    """Creates a compliance matrix CSV and streams text tokens."""
+    """Creates a compliance matrix CSV using a Qwen model on OpenRouter and streams CSV text."""
+
+    def __init__(self,
+                 model: str = "qwen/qwen3-4b:free",
+                 api_key: str | None = None):
+        resolved_key = api_key or os.getenv("OPENROUTER_API_KEY") \
+            or os.getenv("OPENAI_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "Missing OpenRouter API key: set OPENROUTER_API_KEY (preferred) "
+                "or OPENAI_API_KEY in the environment, or pass api_key to ComplianceMatrixAgent"
+            )
+
+        self.model = model
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=resolved_key,
+        )
 
     def stream(self, requirements: str) -> Iterable[str]:
-        # Replace with your CSV generation logic and yield CSV lines or tokens.
-        csv_lines = [
-            "Requirement,Control,Status",
-            f'"{requirements}",ExampleControl,Pending',
-        ]
-        for line in csv_lines:
-            yield line + "\n"
+        system_prompt = (
+            "You are a compliance analyst. Produce a CSV with headers:\n"
+            "Requirement,Control,Status,Notes\n"
+            "Map the given requirements to likely controls; set Status to Pending; "
+            "provide concise Notes. Output only CSV text.")
+        user_prompt = (
+            "Create a compliance matrix CSV for these requirements:\n"
+            f"{requirements}")
+
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{
+                "role": "system",
+                "content": system_prompt
+            }, {
+                "role": "user",
+                "content": user_prompt
+            }],
+            max_tokens=512,
+            temperature=0.3,
+            stream=True,
+        )
+
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                # Yield CSV text increments so the frontend can stream.
+                yield delta.content
 
 
 # ---- Pipeline wrapper ----
