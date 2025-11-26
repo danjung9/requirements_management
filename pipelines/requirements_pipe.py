@@ -39,20 +39,34 @@ class RAGModel:
         self.retriever = retriever
         self.llm = llm
 
-    def extract_requirements(self, query: str) -> str:
+    def extract_requirements(self, query: str) -> dict:
         docs = self.retriever.search(query)
-        # Replace with your own synthesis of requirements from docs.
-        return self.llm.summarize(query=query, docs=docs)
+        # Replace with your own synthesis and compliance assessment.
+        requirements = self.llm.summarize(query=query, docs=docs)
+        compliant = self._assess_compliance(requirements)
+        return {
+            "requirements": requirements,
+            "compliant": compliant,
+        }
+
+    def _assess_compliance(self, requirements: str) -> bool:
+        """
+        Placeholder compliance check. Replace with your actual evaluator
+        (e.g., rule-based, classifier, or LLM judge).
+        """
+        text = requirements.lower()
+        non_compliant_markers = ["gap", "missing", "non-compliant", "not compliant", "fail"]
+        return not any(marker in text for marker in non_compliant_markers)
 
 
 class Router:
     """Chooses a target pipeline for the extracted requirements."""
 
-    def route(self, requirements: str) -> str:
-        # Replace with your own routing logic.
-        if "jira" in requirements.lower():
-            return "jira"
-        return "matrix"
+    def route(self, *, compliant: bool, requirements: str) -> str:
+        """
+        Route to Jira when non-compliant, otherwise to the compliance matrix.
+        """
+        return "matrix" if compliant else "jira"
 
 
 class JiraAgent:
@@ -184,8 +198,11 @@ class RequirementsPipeline:
     def stream(self, *, messages: list[dict]) -> Iterator[Chunk]:
         """Run RAG -> route -> agent and stream tokens as Chunk objects."""
         query = self._extract_user_query(messages)
-        requirements = self.rag_model.extract_requirements(query)
-        target = self.router.route(requirements)
+        extraction = self.rag_model.extract_requirements(query)
+        requirements = extraction["requirements"]
+        compliant = extraction["compliant"]
+
+        target = self.router.route(compliant=compliant, requirements=requirements)
 
         agent = self.agents.get(target)
         if not agent:
