@@ -18,8 +18,8 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 
 # Global RAG variables (defined before Gradio_Events)
-RAG_COLLECTION = None
-RAG_EMBEDDER = None
+#RAG_COLLECTION = None defined in main
+#RAG_EMBEDDER = None defined in main
 RAG_N_RESULTS = 3 
 RAG_MODEL_ID = "zacCMU/miniLM2-ENG3"
 
