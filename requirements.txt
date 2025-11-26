@@ -7,3 +7,4 @@ pypdf
 sentence-transformers
 numpy
 openai
+chromadb

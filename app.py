@@ -13,6 +13,17 @@ from ui_components.settings_header import SettingsHeader
 from ui_components.thinking_button import ThinkingButton
 from dashscope import Generation
 
+## RAG dependencies
+import chromadb 
+from sentence_transformers import SentenceTransformer
+
+# Global RAG variables (defined before Gradio_Events)
+RAG_COLLECTION = None
+RAG_EMBEDDER = None
+RAG_N_RESULTS = 3 
+RAG_MODEL_ID = "zacCMU/miniLM2-ENG3"
+
+
 dashscope.api_key = api_key
 
 MAX_CONTEXT_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
@@ -56,6 +67,8 @@ def load_context_file(file_reference):
         content = f.read()
     truncated = len(content) > MAX_CONTEXT_FILE_CHARACTERS
     content = content[:MAX_CONTEXT_FILE_CHARACTERS].strip()
+    # when uploaded add it to chromadb to! 
+    add_documents_to_collection(collection=client,docs=content)
 
     return {
         "name": os.path.basename(file_path),
@@ -163,10 +176,13 @@ class Gradio_Events:
         # TO DO: Modify the Generation.call parameters as needed for your model
         # Should be a RAG -> router -> agent pipeline
         ##
+            context = retrieve_documents(collection=RAG_COLLECTION,
+                            query=messages,
+                            n_results = 5)
 
             response = Generation.call(
                 model=model,
-                messages=messages,
+                messages=messages+context, # adding rag
                 stream=True,
                 result_format='message',
                 incremental_output=True,
@@ -795,6 +811,101 @@ with gr.Blocks(css=css, fill_width=True) as demo:
                       inputs=[input],
                       outputs=[input])
 
+
+class CustomSBERTEmbeddingFunction(chromadb.EmbeddingFunction):
+    """
+    A custom wrapper to use a SentenceTransformer model as the embedding function 
+    for ChromaDB, satisfying ChromaDB's interface requirements.
+    """
+    def __init__(self, model: SentenceTransformer):
+        self._model = model
+    
+    def __call__(self, texts: list[str]) -> list[list[float]]:
+        # Outputs a list of lists of floats as ChromaDB expects
+        embeddings = self._model.encode(texts, convert_to_tensor=False).tolist()
+        return embeddings
+    
+    def name(self) -> str:
+        return "custom_sbert_wrapper"
+
+
+
+
+def add_documents_to_collection(collection: chromadb.Collection, docs: str):
+    """
+    Chunks a single document string and adds it to the ChromaDB collection.
+    """
+    if not collection:
+        print("RAG Collection is not initialized. Skipping document addition.")
+        return
+        
+    chunks = split_document_into_chunks(docs)
+    if not chunks:
+        return
+
+    # Create unique IDs for each chunk
+    ids = [f"doc_{uuid.uuid4()}" for _ in range(len(chunks))]
+    
+    try:
+        collection.add(
+            documents=chunks,
+            ids=ids,
+            # metadata can be added here, e.g., source file name
+        )
+        print(f"Added {len(chunks)} chunks to ChromaDB.")
+    except Exception as e:
+        print(f"Failed to add documents to ChromaDB: {e}")
+
+def retrieve_documents(collection: chromadb.api.models.Collection, query: str, n_results: int = 5) -> dict:
+    """
+    Retrieves the top N relevant documents from the ChromaDB collection based on a query.
+    """
+    results = collection.query(
+        query_texts=[query],
+        n_results=n_results,
+        include=['documents', 'distances']
+    )
+    return results
+
+def split_document_into_chunks(text: str, chunk_size=300, chunk_overlap=50) -> list[str]:
+    """Simple text splitting for RAG chunking."""
+    if not text:
+        return []
+    
+    # A simplified chunking logic: split by sentence or paragraph and then group
+    # For robust splitting, consider libraries like LangChain's TextSplitters.
+    
+    sentences = text.split(". ")
+    chunks = []
+    current_chunk = ""
+    for sentence in sentences:
+        if len(current_chunk) + len(sentence) > chunk_size and current_chunk:
+            chunks.append(current_chunk.strip())
+            current_chunk = sentence + ". "
+        else:
+            current_chunk += sentence + ". "
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+        
+    return chunks
+
 if __name__ == "__main__":
+
+    try:
+        #print(f"Initializing RAG model: {RAG_MODEL_ID}")
+        RAG_EMBEDDER = SentenceTransformer(RAG_MODEL_ID)
+        custom_ef = CustomSBERTEmbeddingFunction(RAG_EMBEDDER)
+        
+        # Initialize in-memory ChromaDB client
+        client = chromadb.Client()
+        RAG_COLLECTION = client.get_or_create_collection(
+            name="engineering_corpus_rag",
+            embedding_function=custom_ef 
+        )
+    except Exception as e:
+        print(f"FATAL RAG SETUP ERROR: {e}")
+        print("RAG functionality disabled.")
+
+
     demo.queue(default_concurrency_limit=100,
                max_size=100).launch(ssr_mode=False, max_threads=100)
