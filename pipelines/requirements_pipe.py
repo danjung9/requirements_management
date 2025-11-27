@@ -91,11 +91,10 @@ class JiraAgent:
 
     def stream(self, requirements: str) -> Iterable[str]:
         system_prompt = (
-            "You are a Jira assistant. Draft a concise ticket with fields:\n"
-            "- Summary: 1-line goal\n"
-            "- Description: key context and expected behavior\n"
-            "- Acceptance Criteria: 3-5 bullet points, clear and testable.\n"
-            "Keep language direct and actionable.")
+            "You are a Jira assistant. Respond ONLY with compact JSON in this exact shape:\n"
+            '{"summary": "one-line goal", "description": "concise context and expected behavior", '
+            '"acceptance_criteria": ["bullet 1", "bullet 2", "bullet 3"]}\n'
+            "No prose, no markdown, no extra keys.")
         user_prompt = (
             "Create a Jira ticket for these requirements:\n"
             f"{requirements}")
@@ -143,10 +142,10 @@ class ComplianceMatrixAgent:
 
     def stream(self, requirements: str) -> Iterable[str]:
         system_prompt = (
-            "You are a compliance analyst. Produce a CSV with headers:\n"
-            "Requirement,Control,Status,Notes\n"
+            "You are a compliance analyst. Produce ONLY a markdown table with headers:\n"
+            "| Requirement | Control | Status | Notes |\n"
             "Map the given requirements to likely controls; set Status to Pending; "
-            "provide concise Notes. Output only CSV text.")
+            "keep Notes concise. No prose before or after the table.")
         user_prompt = (
             "Create a compliance matrix CSV for these requirements:\n"
             f"{requirements}")
@@ -207,6 +206,9 @@ class RequirementsPipeline:
         agent = self.agents.get(target)
         if not agent:
             raise ValueError(f"No agent configured for route '{target}'")
+
+        # Console visibility for debugging which agent is used.
+        print(f"[pipeline] routing to '{target}' (compliant={compliant})")
 
         # Each agent streams plain text; front end accumulates it.
         for token in agent.stream(requirements=requirements):

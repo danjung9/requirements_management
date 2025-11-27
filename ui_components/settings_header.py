@@ -15,7 +15,7 @@ def SettingsHeader():
                 with antd.Flex(gap="small", align="center", wrap=True):
                     context_file = gr.File(label=None,
                                            file_count="single",
-                                           file_types=[".txt", ".md", ".json", ".csv"],
+                                           file_types=[".txt", ".md", ".json", ".csv", ".pdf"],
                                            type="filepath",
                                            elem_classes="setting-form-file-upload")
                     remove_file_btn = antd.Button("Remove",

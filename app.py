@@ -1,3 +1,4 @@
+from __future__ import annotations
 import uuid
 import time
 import os
@@ -6,29 +7,74 @@ import modelscope_studio.components.antd as antd
 import modelscope_studio.components.antdx as antdx
 import modelscope_studio.components.base as ms
 import modelscope_studio.components.pro as pro
-import dashscope
 from config import DEFAULT_LOCALE, DEFAULT_SETTINGS, DEFAULT_THEME, DEFAULT_SUGGESTIONS, save_history, user_config, bot_config, welcome_config, api_key
 from ui_components.logo import Logo
 from ui_components.settings_header import SettingsHeader
 from ui_components.thinking_button import ThinkingButton
-from dashscope import Generation
+from pipelines.requirements_pipe import (
+    RAGModel as RequirementsRAGModel,
+    Router as RequirementsRouter,
+    RequirementsPipeline,
+    JiraAgent,
+    ComplianceMatrixAgent,
+)
+from pypdf import PdfReader
 
 ## RAG dependencies
 import chromadb 
 from sentence_transformers import SentenceTransformer
 
 # Global RAG variables (defined before Gradio_Events)
-#RAG_COLLECTION = None defined in main
-#RAG_EMBEDDER = None defined in main
+RAG_COLLECTION = None
+RAG_EMBEDDER = None
 RAG_N_RESULTS = 3 
 RAG_MODEL_ID = "zacCMU/miniLM2-ENG3"
+RAG_COLLECTION = None
+RAG_EMBEDDER = None
+client = None
+REQUIREMENTS_PIPELINE = None
 
 
-dashscope.api_key = api_key
+def load_env_file(env_path: str | None = None):
+    """
+    Lightweight .env loader to populate os.environ if keys are missing.
+    Falls back to the .env that lives next to this file so launching from
+    another working directory still picks up keys.
+    """
+    candidate_paths = []
+    if env_path:
+        candidate_paths.append(env_path)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidate_paths.append(os.path.join(base_dir, ".env"))
+        candidate_paths.append(".env")
+
+    for path in candidate_paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    if key and key not in os.environ:
+                        os.environ[key] = value
+            print(f"Loaded environment variables from {path}")
+            return
+        except Exception as exc:
+            print(f"Warning: failed to load {path}: {exc}")
+
+# Load .env early so API keys (e.g., OPENROUTER_API_KEY) are available.
+load_env_file()
+# Basic sanity check so missing keys are obvious in logs.
+if not (os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")):
+    print("Warning: OPENROUTER_API_KEY / OPENAI_API_KEY not set; OpenRouter calls will fail.")
 
 MAX_CONTEXT_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
 MAX_CONTEXT_FILE_CHARACTERS = 6000
-SUPPORTED_CONTEXT_FILE_EXTENSIONS = {".txt", ".md", ".json", ".csv"}
+SUPPORTED_CONTEXT_FILE_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".pdf"}
 
 
 def _extract_uploaded_file_path(file_reference):
@@ -63,12 +109,23 @@ def load_context_file(file_reference):
         raise gr.Error(
             f"Unsupported file type. Allowed: {allowed}")
 
-    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-        content = f.read()
+    content = ""
+    if ext.lower() == ".pdf":
+        try:
+            reader = PdfReader(file_path)
+            text_parts = []
+            for page in reader.pages:
+                text_parts.append(page.extract_text() or "")
+            content = "\n".join(text_parts)
+        except Exception as exc:
+            raise gr.Error(f"Unable to read PDF: {exc}")
+    else:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
     truncated = len(content) > MAX_CONTEXT_FILE_CHARACTERS
     content = content[:MAX_CONTEXT_FILE_CHARACTERS].strip()
     # when uploaded add it to chromadb to! 
-    add_documents_to_collection(collection=client,docs=content)
+    add_documents_to_collection(collection=RAG_COLLECTION, docs=content)
 
     return {
         "name": os.path.basename(file_path),
@@ -171,23 +228,9 @@ class Gradio_Events:
             state: gr.update(value=state_value),
         }
         try:
+            pipeline = ensure_pipeline_initialized()
 
-        ## 
-        # TO DO: Modify the Generation.call parameters as needed for your model
-        # Should be a RAG -> router -> agent pipeline
-        ##
-            context = retrieve_documents(collection=RAG_COLLECTION,
-                            query=messages,
-                            n_results = 5)
-
-            response = Generation.call(
-                model=model,
-                messages=messages+context, # adding rag
-                stream=True,
-                result_format='message',
-                incremental_output=True,
-                enable_thinking=enable_thinking,
-                thinking_budget=settings.get("thinking_budget", 1) * 1024)
+            response = pipeline.stream(messages=messages)
             start_time = time.time()
             reasoning_content = ""
             answer_content = ""
@@ -195,15 +238,16 @@ class Gradio_Events:
             is_answering = False
             contents = [None, None]
             for chunk in response:
-                if (not chunk.output.choices[0].message.get("content")
-                        and not chunk.output.choices[0].message.get(
-                            "reasoning_content")):
+                delta = chunk.output.choices[0].message
+                delta_content = (getattr(delta, "content", None)
+                                 if not isinstance(delta, dict) else delta.get("content"))
+                delta_reason = (getattr(delta, "reasoning_content", None)
+                                if not isinstance(delta, dict) else delta.get("reasoning_content"))
+
+                if (not delta_content) and (not delta_reason):
                     pass
                 else:
-                    delta = chunk.output.choices[0].message
-                    if hasattr(
-                            delta,
-                            'reasoning_content') and delta.reasoning_content:
+                    if delta_reason:
                         if not is_thinking:
                             contents[0] = {
                                 "type": "tool",
@@ -216,8 +260,8 @@ class Gradio_Events:
                                 "editable": False
                             }
                             is_thinking = True
-                        reasoning_content += delta.reasoning_content
-                    if hasattr(delta, 'content') and delta.content:
+                        reasoning_content += delta_reason
+                    if delta_content:
                         if not is_answering:
                             thought_cost_time = "{:.2f}".format(time.time() -
                                                                 start_time)
@@ -230,7 +274,7 @@ class Gradio_Events:
                             }
 
                             is_answering = True
-                        answer_content += delta.content
+                        answer_content += delta_content
 
                     if contents[0]:
                         contents[0]["content"] = reasoning_content
@@ -268,7 +312,7 @@ class Gradio_Events:
                 chatbot: gr.update(value=history),
                 state: gr.update(value=state_value)
             }
-            raise e
+            return
 
     @staticmethod
     def add_message(input_value, settings_form_value, thinking_btn_state_value,
@@ -829,9 +873,39 @@ class CustomSBERTEmbeddingFunction(chromadb.EmbeddingFunction):
         return "custom_sbert_wrapper"
 
 
+class ChromaRetriever:
+    """Thin wrapper to fetch top-n docs from ChromaDB."""
+
+    def __init__(self, collection: chromadb.api.models.Collection | None,
+                 n_results: int = RAG_N_RESULTS):
+        self.collection = collection
+        self.n_results = n_results
+
+    def search(self, query: str) -> list[str]:
+        if not self.collection or not query:
+            return []
+        results = retrieve_documents(self.collection,
+                                     query=query,
+                                     n_results=self.n_results)
+        docs = results.get("documents") or []
+        if docs and isinstance(docs[0], list):
+            docs = docs[0]
+        return docs
 
 
-def add_documents_to_collection(collection: chromadb.Collection, docs: str):
+class LocalSummarizer:
+    """Lightweight summarizer using retrieved context without external calls."""
+
+    def summarize(self, query: str, docs: list[str]) -> str:
+        context = "\n\n".join(docs) if docs else "No retrieved context."
+        return (
+            "Requirements summary (heuristic):\n"
+            f"Inquiry: {query}\n"
+            f"Context:\n{context}"
+        )
+
+
+def add_documents_to_collection(collection: chromadb.Collection | None, docs: str):
     """
     Chunks a single document string and adds it to the ChromaDB collection.
     """
@@ -856,10 +930,14 @@ def add_documents_to_collection(collection: chromadb.Collection, docs: str):
     except Exception as e:
         print(f"Failed to add documents to ChromaDB: {e}")
 
-def retrieve_documents(collection: chromadb.api.models.Collection, query: str, n_results: int = 5) -> dict:
+def retrieve_documents(collection: chromadb.api.models.Collection | None,
+                       query: str,
+                       n_results: int = 5) -> dict:
     """
     Retrieves the top N relevant documents from the ChromaDB collection based on a query.
     """
+    if not collection or not query:
+        return {"documents": [], "distances": []}
     results = collection.query(
         query_texts=[query],
         n_results=n_results,
@@ -889,23 +967,51 @@ def split_document_into_chunks(text: str, chunk_size=300, chunk_overlap=50) -> l
         
     return chunks
 
-if __name__ == "__main__":
 
+def init_rag_if_needed():
+    """Initialize embedder and Chroma collection if not already set."""
+    global RAG_EMBEDDER, RAG_COLLECTION, client
+    if RAG_COLLECTION is not None and RAG_EMBEDDER is not None:
+        return
     try:
-        #print(f"Initializing RAG model: {RAG_MODEL_ID}")
         RAG_EMBEDDER = SentenceTransformer(RAG_MODEL_ID)
         custom_ef = CustomSBERTEmbeddingFunction(RAG_EMBEDDER)
-        
-        # Initialize in-memory ChromaDB client
         client = chromadb.Client()
         RAG_COLLECTION = client.get_or_create_collection(
             name="engineering_corpus_rag",
-            embedding_function=custom_ef 
-        )
+            embedding_function=custom_ef)
+        print("RAG initialized.")
     except Exception as e:
         print(f"FATAL RAG SETUP ERROR: {e}")
         print("RAG functionality disabled.")
+        RAG_COLLECTION = None
+        RAG_EMBEDDER = None
+        client = None
 
+
+def ensure_pipeline_initialized():
+    """Lazy-init the RAG -> router -> agent pipeline."""
+    global REQUIREMENTS_PIPELINE
+    if REQUIREMENTS_PIPELINE:
+        return REQUIREMENTS_PIPELINE
+    load_env_file()
+    init_rag_if_needed()
+    retriever = ChromaRetriever(RAG_COLLECTION, n_results=RAG_N_RESULTS)
+    summarizer = LocalSummarizer()
+    router = RequirementsRouter()
+    jira_agent = JiraAgent()
+    matrix_agent = ComplianceMatrixAgent()
+    REQUIREMENTS_PIPELINE = RequirementsPipeline(
+        rag_model=RequirementsRAGModel(retriever=retriever, llm=summarizer),
+        router=router,
+        jira_agent=jira_agent,
+        matrix_agent=matrix_agent,
+    )
+    return REQUIREMENTS_PIPELINE
+
+if __name__ == "__main__":
+
+    ensure_pipeline_initialized()
 
     demo.queue(default_concurrency_limit=100,
                max_size=100).launch(ssr_mode=False, max_threads=100)

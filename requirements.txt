@@ -1,6 +1,5 @@
 gradio
 modelscope_studio
-dashscope
 google-genai
 nltk
 pypdf
