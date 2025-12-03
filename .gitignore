@@ -2,3 +2,5 @@
 test_rag.py
 __pycache__/
 venv/
+.vscode
+.gitignore

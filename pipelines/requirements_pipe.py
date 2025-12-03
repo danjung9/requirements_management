@@ -50,22 +50,35 @@ class RAGModel:
         }
 
     def _assess_compliance(self, requirements: str) -> bool:
-        """
-        Placeholder compliance check. Replace with your actual evaluator
-        (e.g., rule-based, classifier, or LLM judge).
-        """
         text = requirements.lower()
-        non_compliant_markers = ["gap", "missing", "non-compliant", "not compliant", "fail"]
+        non_compliant_markers = [
+            "gap",
+            "missing",
+            "non-compliant",
+            "not compliant",
+            "fail",
+        ]
         return not any(marker in text for marker in non_compliant_markers)
 
 
 class Router:
     """Chooses a target pipeline for the extracted requirements."""
 
-    def route(self, *, compliant: bool, requirements: str) -> str:
+    def route(self, *, compliant: bool, requirements: str, user_query: str = "") -> str:
         """
-        Route to Jira when non-compliant, otherwise to the compliance matrix.
+        Route based on explicit intent first, otherwise by compliance status.
+
+        - If the user asks for a Jira ticket (keywords like "jira", "ticket",
+          "issue", "bug", "story", "epic"), route to Jira.
+        - Else: non-compliant -> Jira; compliant -> matrix.
         """
+        intent = user_query.lower()
+        wants_jira = any(
+            keyword in intent
+            for keyword in ("jira", "ticket", "issue", "bug", "story", "epic")
+        )
+        if wants_jira:
+            return "jira"
         return "matrix" if compliant else "jira"
 
 
@@ -73,7 +86,7 @@ class JiraAgent:
     """Generates Jira ticket content using a Qwen model on OpenRouter and streams text."""
 
     def __init__(self,
-                 model: str = "qwen/qwen3-4b:free",
+                 model: str = "qwen/qwen3-vl-8b-instruct", #"qwen/qwen3-4b:free",
                  api_key: str | None = None):
         resolved_key = api_key or os.getenv("OPENROUTER_API_KEY") \
             or os.getenv("OPENAI_API_KEY")
@@ -91,10 +104,20 @@ class JiraAgent:
 
     def stream(self, requirements: str) -> Iterable[str]:
         system_prompt = (
-            "You are a Jira assistant. Respond ONLY with compact JSON in this exact shape:\n"
-            '{"summary": "one-line goal", "description": "concise context and expected behavior", '
-            '"acceptance_criteria": ["bullet 1", "bullet 2", "bullet 3"]}\n'
-            "No prose, no markdown, no extra keys.")
+            "You are a Jira assistant. Respond ONLY with valid JSON (no markdown) in this exact shape:\n"
+            '{\n'
+            '  "fields": {\n'
+            '    "project": { "key": "SERVICEDESK" },\n'
+            '    "summary": "User-submitted issue summary",\n'
+            '    "description": "Detailed problem description",\n'
+            '    "issuetype": { "name": "Incident" },\n'
+            '    "reporter": { "name": "username@email.com" },\n'
+            '    "priority": { "name": "High" },\n'
+            '    "labels": ["mobile-app", "user-submitted"],\n'
+            '    "customfield_10002": { "value": "Customer" }\n'
+            '  }\n'
+            '}\n'
+            "Do not add, remove, or rename keys. Fill the values using the user's request. Keep it to valid JSON only.")
         user_prompt = (
             "Create a Jira ticket for these requirements:\n"
             f"{requirements}")
@@ -124,7 +147,7 @@ class ComplianceMatrixAgent:
     """Creates a compliance matrix CSV using a Qwen model on OpenRouter and streams CSV text."""
 
     def __init__(self,
-                 model: str = "qwen/qwen3-4b:free",
+                 model: str = "qwen/qwen3-vl-8b-instruct",#"qwen/qwen3-4b:free",
                  api_key: str | None = None):
         resolved_key = api_key or os.getenv("OPENROUTER_API_KEY") \
             or os.getenv("OPENAI_API_KEY")
@@ -142,10 +165,12 @@ class ComplianceMatrixAgent:
 
     def stream(self, requirements: str) -> Iterable[str]:
         system_prompt = (
-            "You are a compliance analyst. Produce ONLY a markdown table with headers:\n"
-            "| Requirement | Control | Status | Notes |\n"
-            "Map the given requirements to likely controls; set Status to Pending; "
-            "keep Notes concise. No prose before or after the table.")
+            "You are a compliance analyst. Produce ONLY a markdown table (no code fences, no prose) "
+            "with these exact headers:\n"
+            "| Requirement ID | Requirement Text | Source (Spec/Std) | Verification Method | Evidence / Link | Status | Notes |\n"
+            "Use realistic IDs (e.g., SYS-REQ-001…), short requirement text, cite a plausible source, "
+            "choose a verification method (Test, Inspection, Analysis, or combo), provide a concise evidence/link label, "
+            "set Status to one of: Compliant, Partially compliant, Non-compliant, or Pending, and keep Notes brief.")
         user_prompt = (
             "Create a compliance matrix CSV for these requirements:\n"
             f"{requirements}")
@@ -201,7 +226,11 @@ class RequirementsPipeline:
         requirements = extraction["requirements"]
         compliant = extraction["compliant"]
 
-        target = self.router.route(compliant=compliant, requirements=requirements)
+        target = self.router.route(
+            compliant=compliant,
+            requirements=requirements,
+            user_query=query,
+        )
 
         agent = self.agents.get(target)
         if not agent:

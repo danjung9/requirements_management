@@ -34,44 +34,6 @@ RAG_EMBEDDER = None
 client = None
 REQUIREMENTS_PIPELINE = None
 
-
-def load_env_file(env_path: str | None = None):
-    """
-    Lightweight .env loader to populate os.environ if keys are missing.
-    Falls back to the .env that lives next to this file so launching from
-    another working directory still picks up keys.
-    """
-    candidate_paths = []
-    if env_path:
-        candidate_paths.append(env_path)
-    else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        candidate_paths.append(os.path.join(base_dir, ".env"))
-        candidate_paths.append(".env")
-
-    for path in candidate_paths:
-        if not os.path.exists(path):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    key, value = line.split("=", 1)
-                    if key and key not in os.environ:
-                        os.environ[key] = value
-            print(f"Loaded environment variables from {path}")
-            return
-        except Exception as exc:
-            print(f"Warning: failed to load {path}: {exc}")
-
-# Load .env early so API keys (e.g., OPENROUTER_API_KEY) are available.
-load_env_file()
-# Basic sanity check so missing keys are obvious in logs.
-if not (os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")):
-    print("Warning: OPENROUTER_API_KEY / OPENAI_API_KEY not set; OpenRouter calls will fail.")
-
 MAX_CONTEXT_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
 MAX_CONTEXT_FILE_CHARACTERS = 6000
 SUPPORTED_CONTEXT_FILE_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".pdf"}
@@ -141,8 +103,14 @@ def resolve_uploaded_file(uploaded_file_value, state_value):
     if conversation_id:
         previous_settings = state_value["conversation_contexts"].get(
             conversation_id, {}).get("settings", {})
+    # If it's already parsed (dict with content), reuse it instead of reloading
+    if uploaded_file_value and isinstance(uploaded_file_value, dict) and "content" in uploaded_file_value:
+        return uploaded_file_value
+    
+    # Otherwise load from actual file input
     if uploaded_file_value:
         return load_context_file(uploaded_file_value)
+
     return previous_settings.get("uploaded_file")
 
 
@@ -591,11 +559,26 @@ class Gradio_Events:
                 value=state_value)
 
     @staticmethod
-    def preview_uploaded_file(uploaded_file_value):
+    def preview_uploaded_file(uploaded_file_value, state_value):
         if not uploaded_file_value:
-            return gr.update(value=format_file_status(None))
+            return (
+                gr.update(value="No file uploaded"),
+                gr.update(value=state_value)
+            )
+    
         uploaded_file = load_context_file(uploaded_file_value)
-        return gr.update(value=format_file_status(uploaded_file))
+    
+        # Store it into the active conversation state immediately
+        conv_id = state_value.get("conversation_id")
+        if conv_id:
+            ctx = state_value["conversation_contexts"].setdefault(conv_id, {})
+            ctx.setdefault("settings", {**DEFAULT_SETTINGS})
+            ctx["settings"]["uploaded_file"] = uploaded_file
+    
+        return (
+            gr.update(value=format_file_status(uploaded_file)),
+            gr.update(value=state_value)
+        )
 
     @staticmethod
     def remove_uploaded_file(state_value):
@@ -845,9 +828,12 @@ with gr.Blocks(css=css, fill_width=True) as demo:
     clear_btn.click(fn=Gradio_Events.clear_conversation_history,
                     inputs=[state],
                     outputs=[chatbot, state])
-    context_file.change(fn=Gradio_Events.preview_uploaded_file,
-                        inputs=[context_file],
-                        outputs=[file_status])
+    context_file.change(
+        fn=Gradio_Events.preview_uploaded_file,
+        inputs=[context_file, state],
+        outputs=[file_status, state]
+    )
+
     remove_file_btn.click(fn=Gradio_Events.remove_uploaded_file,
                           inputs=[state],
                           outputs=[context_file, file_status, state])
@@ -994,13 +980,12 @@ def ensure_pipeline_initialized():
     global REQUIREMENTS_PIPELINE
     if REQUIREMENTS_PIPELINE:
         return REQUIREMENTS_PIPELINE
-    load_env_file()
     init_rag_if_needed()
     retriever = ChromaRetriever(RAG_COLLECTION, n_results=RAG_N_RESULTS)
     summarizer = LocalSummarizer()
     router = RequirementsRouter()
-    jira_agent = JiraAgent()
-    matrix_agent = ComplianceMatrixAgent()
+    jira_agent = JiraAgent(api_key=api_key)
+    matrix_agent = ComplianceMatrixAgent(api_key=api_key)
     REQUIREMENTS_PIPELINE = RequirementsPipeline(
         rag_model=RequirementsRAGModel(retriever=retriever, llm=summarizer),
         router=router,
@@ -1013,5 +998,7 @@ if __name__ == "__main__":
 
     ensure_pipeline_initialized()
 
-    demo.queue(default_concurrency_limit=100,
-               max_size=100).launch(ssr_mode=False, max_threads=100)
+    demo.queue(
+        default_concurrency_limit=100,
+        max_size=100
+    ).launch()

@@ -1,9 +1,11 @@
 import os
 from modelscope_studio.components.pro.chatbot import ChatbotActionConfig, ChatbotBotConfig, ChatbotUserConfig, ChatbotWelcomeConfig
 
+from dotenv import load_dotenv
+
+load_dotenv(".env")
 # Env
-is_cn = os.getenv('MODELSCOPE_ENVIRONMENT') == 'studio'
-api_key = os.getenv('API_KEY')
+api_key = os.getenv('OPENROUTER_API_KEY')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 QWEN_LOGO_PATH = os.path.join(ASSETS_DIR, "requirementsassistant.png")
@@ -113,7 +115,7 @@ MAX_THINKING_BUDGET = 38
 
 DEFAULT_THINKING_BUDGET = 38
 
-DEFAULT_LOCALE = 'zh_CN' if is_cn else 'en_US'
+DEFAULT_LOCALE = 'en_US'
 
 DEFAULT_THEME = {
     "token": {
